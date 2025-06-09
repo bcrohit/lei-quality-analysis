@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from streamlit_extras.metric_cards import style_metric_cards
 from utils.data_quality_checks import run_quality_checks
 from utils.scoring import calculate_quality_score
-from utils.utils import fetch_data_from_db
+from utils.utils import fetch_data_from_db, format_dataframe, get_display_name, iso2_to_iso3
 
 st.set_page_config(
     page_title="LEI Data Quality Analyzer",
@@ -108,6 +108,7 @@ if df is not None:
     with st.spinner("Analyzing data quality..."):
         df = run_quality_checks(df)
         df = calculate_quality_score(df)
+        df = format_dataframe(df)
         
         # Store in session state
         st.session_state.df = df
@@ -120,14 +121,6 @@ if df is not None:
         st.session_state.median_score = df["QualityScore"].median()
         st.session_state.min_score = df["QualityScore"].min()
         st.session_state.max_score = df["QualityScore"].max()
-        
-        # Get top failing checks (if available)
-        if "Check_" in df.columns.str[:6].any():
-            check_cols = [col for col in df.columns if col.startswith("Check_")]
-            issue_counts = df[check_cols].sum().sort_values(ascending=False)
-            st.session_state.issue_counts = issue_counts
-        else:
-            st.session_state.issue_counts = None
     
     # ====================== Enhanced Visualization Section ======================
     st.subheader("📊 Data Quality Metrics")
@@ -162,9 +155,39 @@ if df is not None:
     style_metric_cards(background_color="#FFFFFF", border_left_color="#2c3e50")
     
     # Visualization tabs
-    tab1, tab2, tab3, tab4 = st.tabs(["Distribution", "Score Analysis", "Quality Issues", "Geospatial"])
+    tab1, tab2, tab3 = st.tabs(["Geospatial", "Distribution", "Score Analysis"])
+ 
+    with tab1:  # Geospatial tab (if location data exists)
+        country = 'Legal Address → Country'
+        if country in df.columns:
+            st.subheader("Geospatial Analysis")
+            
+            country_counts = df[country].value_counts().reset_index()
+            country_counts.columns = [country, 'count']
+            
+            # Country quality scores
+            country_quality = df.groupby(country)['QualityScore'].mean().reset_index()
+            country_data = country_counts.merge(country_quality, on=country)
+            country_data.rename(columns = {country: 'country'}, inplace=True)
+            country_data["iso_alpha_3"] = country_data["country"].apply(iso2_to_iso3)
+            
+            fig = px.choropleth(
+                country_data,
+                locations='iso_alpha_3',
+                locationmode="ISO-3",
+                color="QualityScore",
+                hover_name='country',
+                hover_data=["count"],
+                color_continuous_scale="RdYlGn",
+                range_color=[0, 100],
+                title="Average QualityScore by Country"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        else:
+            st.info("No geographic data available for mapping.")
     
-    with tab1:  # Distribution tab
+    with tab2:  # Distribution tab
         col1, col2 = st.columns(2)
         with col1:
             # Bar chart
@@ -202,7 +225,7 @@ if df is not None:
             )
             st.plotly_chart(fig, use_container_width=True)
     
-    with tab2:  # Score Analysis tab
+    with tab3:  # Score Analysis tab
         col1, col2 = st.columns(2)
         with col1:
             # Histogram
@@ -212,10 +235,10 @@ if df is not None:
                 nbins=20,
                 color_discrete_sequence=["#3498db"],
                 height=400,
-                title="Quality Score Distribution"
+                title="QualityScore Distribution"
             )
             fig.update_layout(
-                xaxis_title="Quality Score",
+                xaxis_title="QualityScore",
                 yaxis_title="Count",
                 bargap=0.1
             )
@@ -228,11 +251,11 @@ if df is not None:
                 y="QualityScore",
                 points="all",
                 height=400,
-                title="Quality Score Spread",
+                title="QualityScore Spread",
                 color_discrete_sequence=["#3498db"]
             )
             fig.update_layout(
-                yaxis_title="Quality Score",
+                yaxis_title="QualityScore",
                 showlegend=False
             )
             st.plotly_chart(fig, use_container_width=True)
@@ -245,122 +268,20 @@ if df is not None:
                     time_df, 
                     x='timestamp', 
                     y='QualityScore',
-                    title="Quality Score Trend Over Time",
+                    title="QualityScore Trend Over Time",
                     markers=True
                 )
                 fig.update_layout(
                     xaxis_title="Date",
-                    yaxis_title="Average Quality Score"
+                    yaxis_title="Average QualityScore"
                 )
                 st.plotly_chart(fig, use_container_width=True)
-    
-    with tab3:  # Quality Issues tab
-        if st.session_state.issue_counts is not None and len(st.session_state.issue_counts) > 0:
-            col1, col2 = st.columns(2)
-            with col1:
-                # Top issues chart
-                fig = px.bar(
-                    st.session_state.issue_counts,
-                    x=st.session_state.issue_counts.values,
-                    y=st.session_state.issue_counts.index,
-                    orientation='h',
-                    color=st.session_state.issue_counts.values,
-                    color_continuous_scale='RdYlGn_r',
-                    height=500,
-                    title="Top Data Quality Issues"
-                )
-                fig.update_layout(
-                    xaxis_title="Number of Records Affected",
-                    yaxis_title="Quality Issue",
-                    coloraxis_showscale=False
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-            with col2:
-                # Issue severity matrix
-                st.subheader("Issue Severity Matrix")
-                issue_severity = []
-                for issue in st.session_state.issue_counts.index:
-                    # Calculate average score for records with this issue
-                    avg_score = df[df[issue] == True]['QualityScore'].mean()
-                    issue_severity.append((issue, st.session_state.issue_counts[issue], avg_score))
-                
-                severity_df = pd.DataFrame(
-                    issue_severity,
-                    columns=["Issue", "Count", "AvgScore"]
-                )
-                
-                fig = px.scatter(
-                    severity_df,
-                    x="Count",
-                    y="AvgScore",
-                    size="Count",
-                    color="AvgScore",
-                    color_continuous_scale="RdYlGn_r",
-                    hover_name="Issue",
-                    size_max=40,
-                    height=500,
-                    title="Issue Severity Analysis"
-                )
-                fig.update_layout(
-                    xaxis_title="Number of Occurrences",
-                    yaxis_title="Average Quality Score for Affected Records",
-                    yaxis_range=[0, 100]
-                )
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("No quality issue data available. Ensure your quality checks add 'Check_' prefixed columns.")
-    
-    with tab4:  # Geospatial tab (if location data exists)
-        if 'country' in df.columns or 'latitude' in df.columns and 'longitude' in df.columns:
-            st.subheader("Geospatial Analysis")
-            
-            if 'country' in df.columns:
-                country_counts = df['country'].value_counts().reset_index()
-                country_counts.columns = ['country', 'count']
-                
-                # Country quality scores
-                country_quality = df.groupby('country')['QualityScore'].mean().reset_index()
-                country_data = country_counts.merge(country_quality, on='country')
-                
-                fig = px.choropleth(
-                    country_data,
-                    locations="country",
-                    locationmode="country names",
-                    color="QualityScore",
-                    hover_name="country",
-                    hover_data=["count"],
-                    color_continuous_scale="RdYlGn",
-                    range_color=[0, 100],
-                    title="Average Quality Score by Country"
-                )
-                st.plotly_chart(fig, use_container_width=True)
-                
-            if 'latitude' in df.columns and 'longitude' in df.columns:
-                # Filter out null coordinates
-                geo_df = df.dropna(subset=['latitude', 'longitude'])
-                
-                if len(geo_df) > 0:
-                    fig = px.scatter_geo(
-                        geo_df,
-                        lat='latitude',
-                        lon='longitude',
-                        color='QualityScore',
-                        size='QualityScore',
-                        hover_name='lei',
-                        color_continuous_scale="RdYlGn",
-                        range_color=[0, 100],
-                        title="Geographic Distribution of Quality Scores"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No geographic data available for mapping. Add 'country' or 'latitude'/'longitude' columns to enable geospatial analysis.")
     
     # ====================== Data Explorer Section ======================
     st.subheader("🔍 Data Explorer")
     
     # Create summary table
-    summary_df = df[["lei", "QualityScore", "QualityLabel"]].copy()
+    summary_df = df[["LEI", "QualityScore", "QualityLabel"]].copy()
     
     # Add row numbers
     summary_df.insert(0, "#", range(1, len(summary_df) + 1))
@@ -407,7 +328,7 @@ if df is not None:
     
     # Download button
     st.download_button(
-        label="📥 Download Full Quality Report",
+        label="📥 Download Report",
         data=df.to_csv(index=False).encode('utf-8'),
         file_name='lei_quality_report.csv',
         mime='text/csv'
@@ -415,18 +336,24 @@ if df is not None:
     
     # Drill-down details
     st.subheader("🔬 Record Details")
+    df['Display Name'] = df.apply(get_display_name, axis=1)
+
+    # Streamlit selectbox with search
     selected_lei = st.selectbox(
-        "Select LEI to inspect details", 
-        options=df["lei"].unique(),
-        index=0
+        "🔍 Search or Select LEI Record", 
+        options=df['Display Name'].tolist(),
+        index=0,
+        key="select_lei"
     )
-    
+
     if selected_lei:
-        record_details = df[df["lei"] == selected_lei].T
+        record_details = df[df['Display Name'] == selected_lei]
+        record_details = (record_details.dropna(axis=1, how='all')).T
         record_details.columns = ["Value"]
         
         # Display as a table with key-value pairs
         st.table(record_details)
+
 
 else:
     # Show empty state with instructions
