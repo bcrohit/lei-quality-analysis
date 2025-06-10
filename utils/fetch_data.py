@@ -61,33 +61,35 @@ def fetch_lei_records(limit=100):
 
 df = pd.DataFrame(fetch_lei_records())
 
-with engine.connect() as conn:
-    inspector = inspect(engine)
-    existing_columns = set()
-
-    # Create table if not exists
-    if table_name not in inspector.get_table_names():
-        df.to_sql(table_name, engine, if_exists="replace", index=False)
-        print("Created table with initial schema.")
-        exit()
-
-    existing_columns = {col["name"] for col in inspector.get_columns(table_name)}
+if __name__ == '__main__':
     
-    # Add missing columns
-    new_columns = set(df.columns) - existing_columns
-    for col in new_columns:
-        conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" TEXT;'))
+    with engine.connect() as conn:
+        inspector = inspect(engine)
+        existing_columns = set()
 
-    # Fetch existing LEIs from the table
-    result = conn.execute(text(f'SELECT lei FROM "{table_name}";'))
-    existing_lei_set = {row[0] for row in result}
+        # Create table if not exists
+        if table_name not in inspector.get_table_names():
+            df.to_sql(table_name, engine, if_exists="replace", index=False)
+            print("Created table with initial schema.")
+            exit()
 
-    # Filter out rows already present
-    df_new = df[~df["lei"].isin(existing_lei_set)]
+        existing_columns = {col["name"] for col in inspector.get_columns(table_name)}
+        
+        # Add missing columns
+        new_columns = set(df.columns) - existing_columns
+        for col in new_columns:
+            conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" TEXT;'))
 
-    # Insert only new rows
-    if not df_new.empty:
-        df_new.to_sql(table_name, engine, if_exists="append", index=False)
-        print(f"Inserted {len(df_new)} new rows.")
-    else:
-        print("No new records to insert.")
+        # Fetch existing LEIs from the table
+        result = conn.execute(text(f'SELECT lei FROM "{table_name}";'))
+        existing_lei_set = {row[0] for row in result}
+
+        # Filter out rows already present
+        df_new = df[~df["lei"].isin(existing_lei_set)]
+
+        # Insert only new rows
+        if not df_new.empty:
+            df_new.to_sql(table_name, engine, if_exists="append", index=False)
+            print(f"Inserted {len(df_new)} new rows.")
+        else:
+            print("No new records to insert.")
