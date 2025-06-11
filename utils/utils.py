@@ -60,3 +60,15 @@ def iso2_to_iso3(code):
         return pycountry.countries.get(alpha_2=code).alpha_3
     except:
         return None
+    
+def check_for_timestamp(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Dynamically convert timestamps which are in TEXT format to actual timestamps by trial and error method.
+    """
+    for col in df.columns:
+        try:
+            df[col] = pd.to_datetime(df[col], format='%Y-%m-%d %H:%M:%S.%f')
+            continue  # If datetime conversion succeeded, skip numeric
+        except (ValueError, TypeError):
+            pass
+    return df
