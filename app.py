@@ -1,11 +1,12 @@
-import streamlit as st
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
+import streamlit as st
 from streamlit_extras.metric_cards import style_metric_cards
+
 from utils.data_quality_checks import run_quality_checks
 from utils.scoring import calculate_quality_score
-from utils.utils import fetch_data_from_db, format_dataframe, get_display_name, iso2_to_iso3
+from utils.utils import (check_for_timestamp, fetch_data_from_db,
+                         format_dataframe, get_display_name, iso2_to_iso3)
 
 st.set_page_config(
     page_title="LEI Data Quality Analyzer",
@@ -103,6 +104,7 @@ elif source_option == "Fetch from Database":
     # if st.button("Fetch Data", type="primary"):
     with st.spinner("Fetching data from database..."):
         df = fetch_data_from_db()
+        df = check_for_timestamp(df)
 
 if df is not None:
     with st.spinner("Analyzing data quality..."):
@@ -163,21 +165,21 @@ if df is not None:
             st.subheader("Geospatial Analysis")
             
             country_counts = df[country].value_counts().reset_index()
-            country_counts.columns = [country, 'count']
+            country_counts.columns = [country, 'Count']
             
             # Country quality scores
             country_quality = df.groupby(country)['QualityScore'].mean().reset_index()
             country_data = country_counts.merge(country_quality, on=country)
             country_data.rename(columns = {country: 'country'}, inplace=True)
-            country_data["iso_alpha_3"] = country_data["country"].apply(iso2_to_iso3)
+            country_data["Country"] = country_data["country"].apply(iso2_to_iso3)
             
             fig = px.choropleth(
                 country_data,
-                locations='iso_alpha_3',
+                locations='Country',
                 locationmode="ISO-3",
                 color="QualityScore",
                 hover_name='country',
-                hover_data=["count"],
+                hover_data=["Count"],
                 color_continuous_scale="RdYlGn",
                 range_color=[0, 100],
                 title="Average QualityScore by Country"
@@ -308,23 +310,17 @@ if df is not None:
     start_idx = st.session_state.page * page_size
     end_idx = start_idx + page_size
     paginated_df = summary_df.iloc[start_idx:end_idx]
+    paginated_df['LEI'] = paginated_df['LEI'].astype('string')
+    # Debug code line
+    # paginated_df.astype('string')
     
     # Display table with custom styling
     st.dataframe(
-        paginated_df.style.applymap(
-            lambda x: "color: #27ae60" if x == "Good" else (
-                "color: #f39c12" if x == "Moderate" else "color: #e74c3c"
-            ), 
-            subset=["QualityLabel"]
-        ).background_gradient(
-            subset=["QualityScore"], 
-            cmap="RdYlGn", 
-            vmin=0, 
-            vmax=100
-        ),
+        paginated_df,
         height=(min(len(paginated_df), 10) * 35) + 35,
         use_container_width=True
     )
+
     
     # Download button
     st.download_button(
