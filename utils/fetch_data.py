@@ -65,31 +65,37 @@ if __name__ == '__main__':
     
     with engine.connect() as conn:
         inspector = inspect(engine)
-        existing_columns = set()
 
-        # Create table if not exists
+        # Create table if it does not exist
         if table_name not in inspector.get_table_names():
             df.to_sql(table_name, engine, if_exists="replace", index=False)
             print("Created table with initial schema.")
             exit()
 
+        # Add missing columns (only if needed)
         existing_columns = {col["name"] for col in inspector.get_columns(table_name)}
-        
-        # Add missing columns
         new_columns = set(df.columns) - existing_columns
         for col in new_columns:
             conn.execute(text(f'ALTER TABLE "{table_name}" ADD COLUMN "{col}" TEXT;'))
+            conn.commit()
 
-        # Fetch existing LEIs from the table
-        result = conn.execute(text(f'SELECT lei FROM "{table_name}";'))
-        existing_lei_set = {row[0] for row in result}
+        # Create a temporary table with incoming data
+        tmp_table = f"{table_name}_tmp"
+        df.to_sql(tmp_table, engine, if_exists="replace", index=False)
 
-        # Filter out rows already present
-        df_new = df[~df["lei"].isin(existing_lei_set)]
+        # Insert only new LEIs from temp table using LEFT JOIN
+        insert_sql = f"""
+            INSERT INTO "{table_name}" ({', '.join(f'"{col}"' for col in df.columns)})
+            SELECT {', '.join(f't."{col}"' for col in df.columns)}
+            FROM "{tmp_table}" t
+            LEFT JOIN "{table_name}" main ON t.lei = main.lei
+            WHERE main.lei IS NULL;
+        """
 
-        # Insert only new rows
-        if not df_new.empty:
-            df_new.to_sql(table_name, engine, if_exists="append", index=False)
-            print(f"Inserted {len(df_new)} new rows.")
-        else:
-            print("No new records to insert.")
+        result = conn.execute(text(insert_sql))
+        conn.commit()
+        print(f"Inserted {result.rowcount} new rows.")
+
+        # Drop the temporary table
+        conn.execute(text(f'DROP TABLE IF EXISTS "{tmp_table}";'))
+        conn.commit()
